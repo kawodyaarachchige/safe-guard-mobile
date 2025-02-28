@@ -1,10 +1,11 @@
 import { useEffect } from 'react';
-
+import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
+import { Provider } from 'react-redux';
+import { PersistGate } from 'redux-persist/integration/react';
+import { persistor, store } from '@/store';
 
 
-import { supabase } from '@/lib/supabase';
-import { router, Stack } from 'expo-router';
 
 declare global {
   interface Window {
@@ -14,24 +15,23 @@ declare global {
 
 export default function RootLayout() {
   useEffect(() => {
-    window.frameworkReady?.();
-
-    supabase.auth.onAuthStateChange((event, session) => {
-      if (event === 'SIGNED_IN') {
-        router.replace('/(tabs)');
-      } else if (event === 'SIGNED_OUT') {
-        router.replace('/auth/sign-in');
-      }
-    });
+    if (typeof window !== 'undefined') {
+      window.frameworkReady?.();
+    }
   }, []);
 
   return (
-    <>
-      <Stack screenOptions={{ headerShown: false }}>
-        <Stack.Screen name="auth" options={{ headerShown: false }} />
-        <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-      </Stack>
-      <StatusBar style="auto" />
-    </>
-  );
+    <Provider store={store}>
+        <PersistGate loading={null} persistor={persistor}>
+          <Stack screenOptions={{ headerShown: false }}>
+
+            <Stack.Screen name="index" options={{ headerShown: false }} />
+            <Stack.Screen name="register" options={{ headerShown: false }} />
+            <Stack.Screen name="(tabs)" options={{ headerShown: false, gestureEnabled: false }} />
+            <Stack.Screen name="+not-found" options={{ title: 'Oops!' }} />
+          </Stack>
+          <StatusBar style="auto" />
+        </PersistGate>
+    </Provider>
+);
 }

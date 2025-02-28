@@ -1,120 +1,238 @@
 import { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Platform, Vibration, Alert } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import { View, Text, StyleSheet, TouchableOpacity, Alert, Platform } from 'react-native';
+import { useSelector, useDispatch } from 'react-redux';
+import { Shield, Send, MapPin } from 'lucide-react-native';
 import * as Location from 'expo-location';
-import * as Notifications from 'expo-notifications';
 
-Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowAlert: true,
-    shouldPlaySound: true,
-    shouldSetBadge: true,
-  }),
-});
+import MapView, { Marker } from 'react-native-maps';
+import Animated, { useSharedValue, withSpring, withRepeat, withTiming, useAnimatedStyle } from 'react-native-reanimated';
+import { RootState } from '@/store';
+import { sendAlert } from '@/store/slices/alertSlice';
 
 export default function SOSScreen() {
-  const [isActive, setIsActive] = useState(false);
-  const [location, setLocation] = useState(null);
-  const [contacts, setContacts] = useState([
-    // Sample emergency contacts (You can add dynamic contacts or use some other method to store these)
-    { id: '1', name: 'John Doe', phone: '123456789' },
-    { id: '2', name: 'Jane Smith', phone: '987654321' }
-  ]);
+  const dispatch = useDispatch();
+  const contacts = useSelector((state: RootState) => state.contacts.contacts);
+  const [location, setLocation] = useState<Location.LocationObject | null>(null);
+  const [isSOSActive, setIsSOSActive] = useState(false);
+  const [countdown, setCountdown] = useState(5);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  const activateSOS = async () => {
-    if (contacts.length === 0) {
-      Alert.alert('No Emergency Contacts', 'Please add emergency contacts first.');
-      return;
-    }
+  const scale = useSharedValue(1);
+  const opacity = useSharedValue(1);
 
-    setIsActive(true);
-    Vibration.vibrate([500, 1000, 500, 1000], true);
+  // Start location tracking
+  useEffect(() => {
+    let locationSubscription: Location.LocationSubscription | null = null;
 
-    try {
+    const startLocationTracking = async () => {
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== 'granted') {
-        Alert.alert('Permission Denied', 'Location permission is required for SOS.');
+        setErrorMsg('Permission to access location was denied');
         return;
       }
 
-      const location = await Location.getCurrentPositionAsync({});
-      setLocation(location);
+      // Get initial location
+      const initialLocation = await Location.getCurrentPositionAsync({});
+      setLocation(initialLocation);
 
-      // Send notification to emergency contacts
-      await Notifications.scheduleNotificationAsync({
-        content: {
-          title: "Emergency SOS Activated!",
-          body: "Location has been shared with your emergency contacts.",
-          data: { location },
+      // Subscribe to location updates
+      locationSubscription = await Location.watchPositionAsync(
+        {
+          accuracy: Location.Accuracy.High,
+          timeInterval: 5000, // Update every 5 seconds
+          distanceInterval: 10, // Update every 10 meters
         },
-        trigger: null,
-      });
+        (newLocation) => {
+          setLocation(newLocation);
+        }
+      );
+    };
 
-      // Send SMS to emergency contacts (Platform specific)
-      if (Platform.OS !== 'web') {
-        contacts.forEach(contact => {
-          // Implement SMS sending logic here
-          console.log(`Sending SOS to ${contact.name} at ${contact.phone}`);
-        });
+    startLocationTracking();
+
+    // Cleanup subscription on unmount
+    return () => {
+      if (locationSubscription) {
+        locationSubscription.remove();
       }
-    } catch (error) {
-      console.error('Error activating SOS:', error);
-      Alert.alert('Error', 'Failed to activate SOS. Please try again.');
+    };
+  }, []);
+
+  useEffect(() => {
+    if (isSOSActive) {
+      // Pulsating animation for SOS button
+      scale.value = withRepeat(
+        withTiming(1.2, { duration: 1000 }),
+        -1,
+        true
+      );
+      opacity.value = withRepeat(
+        withTiming(0.7, { duration: 1000 }),
+        -1,
+        true
+      );
+
+      // Countdown timer
+      let timer: NodeJS.Timeout;
+      if (countdown > 0) {
+        timer = setTimeout(() => setCountdown(countdown - 1), 1000);
+      } else {
+        sendSOSAlert();
+      }
+      return () => {
+        if (timer) clearTimeout(timer);
+      };
+    } else {
+      scale.value = withSpring(1);
+      opacity.value = withSpring(1);
+      setCountdown(5);
+    }
+  }, [isSOSActive, countdown]);
+
+  const animatedStyles = useAnimatedStyle(() => {
+    return {
+      transform: [{ scale: scale.value }],
+      opacity: opacity.value,
+    };
+  });
+
+  const toggleSOS = () => {
+    if (!isSOSActive) {
+      setIsSOSActive(true);
+      Alert.alert(
+        "SOS Activated",
+        `Emergency alert will be sent in ${countdown} seconds. Tap again to cancel.`,
+        [{ text: "OK" }]
+      );
+    } else {
+      setIsSOSActive(false);
+      Alert.alert(
+        "SOS Cancelled",
+        "Emergency alert has been cancelled.",
+        [{ text: "OK" }]
+      );
     }
   };
 
-  const deactivateSOS = () => {
-    setIsActive(false);
-    Vibration.cancel();
+  const sendSOSAlert = () => {
+    if (contacts.length === 0) {
+      Alert.alert(
+        "No Emergency Contacts",
+        "Please add emergency contacts in the Contacts tab.",
+        [{ text: "OK" }]
+      );
+      setIsSOSActive(false);
+      return;
+    }
+
+    const locationStr = location
+      ? `Latitude: ${location.coords.latitude}, Longitude: ${location.coords.longitude}`
+      : 'Location not available';
+
+    const alertData = {
+      id: Date.now().toString(),
+      type: 'SOS',
+      message: 'EMERGENCY: I need help immediately!',
+      location: locationStr,
+      timestamp: new Date().toISOString(),
+      status: 'sent'
+    };
+
+    dispatch(sendAlert(alertData));
+
+    Alert.alert(
+      "SOS Alert Sent",
+      "Emergency alert has been sent to all your emergency contacts.",
+      [{ text: "OK" }]
+    );
+
+    setIsSOSActive(false);
   };
 
   return (
     <View style={styles.container}>
-      <View style={styles.header}>
-        <Text style={styles.title}>Emergency SOS</Text>
-        <Text style={styles.subtitle}>
-          Press and hold the button to activate emergency mode
-        </Text>
+      <View style={styles.mapContainer}>
+        {Platform.OS !== 'web' && location ? (
+          <MapView
+            style={styles.map}
+            initialRegion={{
+              latitude: location.coords.latitude,
+              longitude: location.coords.longitude,
+              latitudeDelta: 0.01,
+              longitudeDelta: 0.01,
+            }}
+          >
+            <Marker
+              coordinate={{
+                latitude: location.coords.latitude,
+                longitude: location.coords.longitude,
+              }}
+              title="Your Location"
+            />
+          </MapView>
+        ) : (
+          <View style={styles.mapPlaceholder}>
+            <MapPin size={40} color="#FF4785" />
+            <Text style={styles.mapPlaceholderText}>
+              {errorMsg || 'Map not available on web platform'}
+            </Text>
+          </View>
+        )}
       </View>
 
-      <TouchableOpacity
-        style={[styles.sosButton, isActive && styles.sosButtonActive]}
-        onLongPress={activateSOS}
-        onPress={deactivateSOS}>
-        <Ionicons
-          name={isActive ? "alert-circle" : "alert-circle-outline"}
-          size={64}
-          color="#fff"
-        />
-        <Text style={styles.sosButtonText}>
-          {isActive ? 'EMERGENCY ACTIVE' : 'HOLD FOR SOS'}
+      <View style={styles.infoContainer}>
+        <Text style={styles.infoTitle}>Emergency SOS</Text>
+        <Text style={styles.infoText}>
+          Press and hold the SOS button in case of emergency. This will send your current location and an alert message to all your emergency contacts.
         </Text>
-      </TouchableOpacity>
 
-      {isActive && (
-        <View style={styles.activeInfo}>
-          <Text style={styles.activeText}>Emergency Mode Active</Text>
-          <Text style={styles.activeSubtext}>
-            Your location is being shared with emergency contacts
-          </Text>
-          <Text style={styles.tapText}>Tap the button to deactivate</Text>
-        </View>
-      )}
+        {isSOSActive && (
+          <View style={styles.countdownContainer}>
+            <Text style={styles.countdownText}>
+              Sending alert in {countdown} seconds...
+            </Text>
+            <TouchableOpacity
+              style={styles.cancelButton}
+              onPress={() => setIsSOSActive(false)}
+            >
+              <Text style={styles.cancelButtonText}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        )}
 
-      <View style={styles.features}>
-        <Text style={styles.featuresTitle}>When activated:</Text>
-        <View style={styles.featureItem}>
-          <Ionicons name="location" size={24} color="#FF4785" />
-          <Text style={styles.featureText}>Shares your live location</Text>
+        <Animated.View style={[styles.sosButtonContainer, animatedStyles]}>
+          <TouchableOpacity
+            style={[
+              styles.sosButton,
+              isSOSActive && styles.sosButtonActive
+            ]}
+            onPress={toggleSOS}
+            activeOpacity={0.7}
+          >
+            <Shield size={40} color="#fff" />
+            <Text style={styles.sosButtonText}>
+              {isSOSActive ? 'CANCEL SOS' : 'SOS'}
+            </Text>
+          </TouchableOpacity>
+        </Animated.View>
+
+        <View style={styles.contactsInfo}>
+          <Text style={styles.contactsTitle}>Emergency Contacts</Text>
+          {contacts.length > 0 ? (
+            <Text style={styles.contactsText}>
+              {contacts.length} contacts will be notified
+            </Text>
+          ) : (
+            <Text style={styles.contactsWarning}>
+              No emergency contacts added. Please add contacts in the Contacts tab.
+            </Text>
+          )}
         </View>
-        <View style={styles.featureItem}>
-          <Ionicons name="notifications" size={24} color="#FF4785" />
-          <Text style={styles.featureText}>Notifies emergency contacts</Text>
-        </View>
-        <View style={styles.featureItem}>
-          <Ionicons name="videocam" size={24} color="#FF4785" />
-          <Text style={styles.featureText}>Records video evidence</Text>
-        </View>
+
+        <TouchableOpacity style={styles.sendLocationButton}>
+          <Send size={20} color="#fff" />
+          <Text style={styles.sendLocationText}>Share My Location</Text>
+        </TouchableOpacity>
       </View>
     </View>
   );
@@ -123,93 +241,131 @@ export default function SOSScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#fff',
+    backgroundColor: '#f8f9fa',
+  },
+  mapContainer: {
+    height: '40%',
+    width: '100%',
+    backgroundColor: '#e9ecef',
+  },
+  map: {
+    width: '100%',
+    height: '100%',
+  },
+  mapPlaceholder: {
+    width: '100%',
+    height: '100%',
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#e9ecef',
+  },
+  mapPlaceholderText: {
+    marginTop: 10,
+    color: '#666',
+    textAlign: 'center',
+    paddingHorizontal: 20,
+  },
+  infoContainer: {
+    flex: 1,
     padding: 20,
+    alignItems: 'center',
   },
-  header: {
-    marginBottom: 40,
-  },
-  title: {
-    fontSize: 28,
+  infoTitle: {
+    fontSize: 24,
     fontWeight: 'bold',
-    color: '#1F2937',
-    textAlign: 'center',
+    marginBottom: 10,
+    color: '#333',
   },
-  subtitle: {
+  infoText: {
     fontSize: 16,
-    color: '#6B7280',
+    color: '#666',
     textAlign: 'center',
-    marginTop: 8,
+    marginBottom: 20,
+  },
+  sosButtonContainer: {
+    marginVertical: 20,
   },
   sosButton: {
-    backgroundColor: '#DC2626',
-    width: 200,
-    height: 200,
-    borderRadius: 100,
-    alignItems: 'center',
+    backgroundColor: '#FF0000',
+    width: 150,
+    height: 150,
+    borderRadius: 75,
     justifyContent: 'center',
-    alignSelf: 'center',
-    ...Platform.select({
-      ios: {
-        shadowColor: '#DC2626',
-        shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: 0.3,
-        shadowRadius: 8,
-      },
-      android: {
-        elevation: 8,
-      },
-    }),
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: {
+      width: 0,
+      height: 4,
+    },
+    shadowOpacity: 0.3,
+    shadowRadius: 4.65,
+    elevation: 8,
   },
   sosButtonActive: {
-    backgroundColor: '#991B1B',
+    backgroundColor: '#cc0000',
   },
   sosButtonText: {
     color: '#fff',
-    fontSize: 16,
     fontWeight: 'bold',
-    marginTop: 8,
-  },
-  activeInfo: {
-    marginTop: 30,
-    alignItems: 'center',
-  },
-  activeText: {
     fontSize: 20,
-    fontWeight: 'bold',
-    color: '#991B1B',
+    marginTop: 10,
   },
-  activeSubtext: {
-    fontSize: 14,
-    color: '#6B7280',
-    marginTop: 8,
+  countdownContainer: {
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  countdownText: {
+    fontSize: 18,
+    color: '#FF0000',
+    fontWeight: 'bold',
+  },
+  cancelButton: {
+    marginTop: 10,
+    padding: 10,
+  },
+  cancelButtonText: {
+    color: '#666',
+    fontSize: 16,
+  },
+  contactsInfo: {
+    width: '100%',
+    alignItems: 'center',
+    marginTop: 20,
+  },
+  contactsTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    marginBottom: 5,
+  },
+  contactsText: {
+    fontSize: 16,
+    color: '#666',
+  },
+  contactsWarning: {
+    fontSize: 16,
+    color: '#FF4785',
     textAlign: 'center',
   },
-  tapText: {
-    fontSize: 14,
-    color: '#6B7280',
-    marginTop: 16,
-  },
-  features: {
-    marginTop: 60,
-    padding: 20,
-    backgroundColor: '#F3F4F6',
-    borderRadius: 16,
-  },
-  featuresTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#1F2937',
-    marginBottom: 16,
-  },
-  featureItem: {
+  sendLocationButton: {
     flexDirection: 'row',
+    backgroundColor: '#FF4785',
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    borderRadius: 25,
     alignItems: 'center',
-    marginBottom: 16,
+    marginTop: 20,
+    shadowColor: '#000',
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.25,
+    shadowRadius: 3.84,
+    elevation: 5,
   },
-  featureText: {
-    fontSize: 16,
-    color: '#4B5563',
-    marginLeft: 12,
+  sendLocationText: {
+    color: '#fff',
+    fontWeight: 'bold',
+    marginLeft: 10,
   },
 });
